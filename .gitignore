@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+state*.json
+*_config.json
+node_modules/
+.env
+.env.*
+fishworld-harness/

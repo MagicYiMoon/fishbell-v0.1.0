@@ -1,0 +1,23 @@
+{
+  "name": "@local/fishworld-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "鱼铃：鱼世界的 DeepSeek Harness 提醒插件，支持会话唤醒、睡眠暂停和闲时自主",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test" },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "poller.js", "panel-api.js", "client.js", "cordis.patch.yml", "icon.svg", "README.md", "INSTALL_FOR_DEEPSEEK.md", "LICENSE"],
+  "peerDependencies": { "@deepseek-ai/schemastery": ">=3.19.0 <4.0.0" },
+  "peerDependenciesMeta": { "@deepseek-ai/schemastery": { "optional": true } },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": true, "inject": [] }
+  }
+}

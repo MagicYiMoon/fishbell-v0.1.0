@@ -1,0 +1,18 @@
+{
+  "enabled": {"description": "启用后台轮询", "type": "bool", "default": true},
+  "watch_key": {"description": "鱼世界观看密钥", "type": "string", "default": "", "hint": "只填 fwr_ 开头的观看密钥。MCP 的 fw_ 操作密钥保留在原 MCP 配置里。不要把真实密钥发进 QQ。"},
+  "mode": {"description": "工作模式", "type": "string", "options": ["agent", "notify"], "default": "agent", "hint": "agent：新事件进入绑定会话，使用原有人格、历史、模型和 MCP 继续行动。notify：只推送 QQ 提醒。"},
+  "interval_seconds": {"description": "轮询间隔（秒）", "type": "int", "default": 30, "hint": "最小 15 秒；空轮询不调用模型。"},
+  "pause_while_sleeping": {"description": "鱼睡着时暂停通知轮询", "type": "bool", "default": true, "hint": "睡眠期间只低频查是否醒来；停止自动 QQ 提醒和 MCP 唤醒，醒来从旧游标继续。"},
+  "sleep_check_seconds": {"description": "睡眠时检查是否醒来的间隔（秒）", "type": "int", "default": 120, "hint": "范围 30–1800。仅检查观看状态，不取通知、不消耗模型额度；接口失败时会退避。"},
+  "mcp_server_name": {"description": "今日日记使用的 AstrBot MCP 连接名称", "type": "string", "default": "fish-world", "hint": "填写管理面板中这条鱼已接好的 MCP 连接名称，不是地址或密钥。留空关闭私聊日记查询。"},
+  "event_kinds": {"description": "接收的事件类型", "type": "list", "default": ["talk", "message", "note", "friend_request", "doorbell", "work", "like", "feed"], "hint": "可用 talk、message、note、friend_request、doorbell、work、arrive、done、cards、like、feed。自定义列表升级后保持原样。"},
+  "wake_kinds": {"description": "需要唤醒模型的事件类型", "type": "list", "default": ["talk", "message", "friend_request", "doorbell", "work"], "hint": "须同时在接收类型中。like、feed 只提醒；cards 可选，当前不在牌馆或提醒过旧时只发普通提醒。"},
+  "max_wakes_per_day": {"description": "每日模型唤醒总上限", "type": "int", "default": 48, "hint": "北京时间自然日；按批次计算，包含事件、闲时和试唤醒。0 为只提醒。达到上限后新事件改发普通 QQ 提醒，不留到次日自动补唤醒。"},
+  "talk_cooldown_seconds": {"description": "同一发送者当面对话唤醒冷却（秒）", "type": "int", "default": 300, "hint": "冷却内的新 talk 保留到冷却结束再合并处理；0 关闭。其他事件不受此项影响。"},
+  "quiet_start": {"description": "免打扰开始时间", "type": "string", "default": "", "hint": "北京时间 HH:MM，例如 23:00。与结束时间同时留空关闭。期间保留队列，结束后处理。"},
+  "quiet_end": {"description": "免打扰结束时间", "type": "string", "default": "", "hint": "北京时间 HH:MM，例如 07:00；支持跨午夜，不能与开始时间相同。"},
+  "idle_minutes": {"description": "闲时自主生活检查间隔（分钟）", "type": "int", "default": 0, "hint": "0 关闭。可设 20；启用后最小 5 分钟。没有新事件也会调用模型，通过 MCP 了解世界、安排日常，会消耗 token。"},
+  "max_idle_wakes_per_day": {"description": "每日闲时唤醒上限", "type": "int", "default": 12, "hint": "同时受每日总上限约束。例如总上限 48、闲时上限 12。"},
+  "busy_timeout_seconds": {"description": "等待一轮模型执行的最长时间（秒）", "type": "int", "default": 600, "hint": "范围 60–3600。等待期间不提交其他唤醒。超时后允许处理后续新事件，不重试结果未知的旧批次；工具很慢时请适当调大。"}
+}

@@ -1,0 +1,9 @@
+- insert:
+    - id: fishworld-harness
+      name: '@local/fishworld-harness'
+      config:
+        key: ''
+        sessionId: ''
+        enabled: true
+        pauseWhileSleeping: true
+        idleEnabled: false
