@@ -467,6 +467,96 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.plugin.storage_error)
         self.assertFalse(self.adapter.events)
 
+    async def test_self_directed_idle_takes_precedence_and_uses_only_its_mcp(self):
+        now = NOW + 1800
+        self.plugin.config.update(idle_minutes=20, idle_style="self", social_mode="friends")
+        cfg = main.settings(self.plugin.config)
+        tools = [
+            types.SimpleNamespace(name=name, mcp_server_name=server, mcp_tool={"name": name})
+            for name, server in (
+                ("world_now", "fish-world"),
+                ("world_do", "fish-world"),
+                ("world_go", "fish-world"),
+                ("world_say", "other-fish"),
+                ("world_feed", "fish-world"),
+            )
+        ]
+        self.plugin.context.get_llm_tool_manager = lambda: types.SimpleNamespace(
+            get_full_tool_set=lambda: Tools(tools)
+        )
+        self.plugin.snapshot, self.plugin.snapshot_at, self.plugin.last_response = (
+            snapshot(),
+            now,
+            now,
+        )
+        await self.plugin._deliver(cfg, now)
+        event = self.adapter.events[-1]
+        self.assertIn("由鱼做主", event.message_str)
+        self.assertIn("什么都不做", event.message_str)
+        self.assertIsNone(event.get_extra(main.IS_SOCIAL))
+        saved = core.StateStore(self.path, now).data
+        self.assertEqual(
+            (saved["wake_count"], saved["idle_count"], saved["social_count"]), (1, 1, 0)
+        )
+        request = types.SimpleNamespace(func_tool=Tools(tools))
+        with patch.object(main.time, "time", return_value=now):
+            await self.plugin.on_request(event, request)
+            self.assertEqual(
+                {tool.name for tool in request.func_tool.tools},
+                {"world_now", "world_do", "world_go"},
+            )
+            self.plugin.config["idle_style"] = "guided"
+            request.func_tool = Tools(tools)
+            await self.plugin.on_request(event, request)
+            self.assertIsNone(request.func_tool)
+
+    async def test_social_counts_once_and_checks_tools_from_the_selected_mcp(self):
+        now = NOW + 1800
+        self.plugin.config.update(
+            idle_minutes=20,
+            social_mode="friends",
+            social_action="greet",
+            social_preferences="逛公园",
+            max_social_per_day=1,
+        )
+        cfg = main.settings(self.plugin.config)
+        tools = [
+            types.SimpleNamespace(name=name, mcp_server_name="fish-world", mcp_tool={"name": name})
+            for name in ("world_now", "world_say", "world_friends", "world_do")
+        ]
+        self.plugin.context.get_llm_tool_manager = lambda: types.SimpleNamespace(
+            get_full_tool_set=lambda: Tools(tools)
+        )
+        self.plugin.snapshot, self.plugin.snapshot_at, self.plugin.last_response = (
+            snapshot(),
+            now,
+            now,
+        )
+        await self.plugin._deliver(cfg, now)
+        event = self.adapter.events[-1]
+        self.assertIn("只用 world_friends 查看好友列表", event.message_str)
+        self.assertIn("逛公园", event.message_str)
+        self.assertNotIn("免费的结伴邀请", event.message_str)
+        saved = core.StateStore(self.path, now).data
+        self.assertEqual(
+            (saved["wake_count"], saved["idle_count"], saved["social_count"]), (1, 1, 1)
+        )
+        request = types.SimpleNamespace(func_tool=Tools(tools))
+        with patch.object(main.time, "time", return_value=now):
+            await self.plugin.on_request(event, request)
+            self.assertEqual(
+                [t.name for t in request.func_tool.tools],
+                ["world_now", "world_say", "world_friends"],
+            )
+            self.plugin.config["social_mode"] = "off"
+            request.func_tool = Tools(tools)
+            await self.plugin.on_request(event, request)
+            self.assertIsNone(request.func_tool)
+        self.assertIsNone(self.plugin._social_plan(cfg, snapshot(), now + 36000))
+        self.plugin.store.roll_day(now + 86400)
+        self.assertEqual(self.plugin.store.data["social_count"], 0)
+        self.assertEqual(self.plugin.store.data["last_social"], now)
+
     async def test_model_timeout_never_replays_consumed_batch(self):
         self.receive()
         await self.plugin._deliver(self.cfg, NOW)

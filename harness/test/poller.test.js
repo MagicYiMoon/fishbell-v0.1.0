@@ -19,6 +19,7 @@ function fixture(overrides = {}, disk, initial) {
   f.roots = [f.target, { id: 'another', followup() { assert.fail('delivered to another conversation') } }]
   f.open = () => new Poller(config, {
     store, roots: () => f.roots, now: f.time, mcpReady: () => f.ready, alarmReady: () => f.alarmReady,
+    socialReady: () => f.socialReady !== false,
     request(path, key, { cursor }) {
       calls.push([path, cursor]); assert.equal(key, config.key)
       const result = f[path]
@@ -58,6 +59,74 @@ test('sleep suspends only the notify path, keeps the cursor across restart and r
   assert.equal(f.poller.status().lastSkipped, 7)
   assert.equal(f.deliveries[0][0], 'wake')
   assert.doesNotMatch(JSON.stringify(f.deliveries), /不应进入提示/)
+})
+
+test('self-directed idle replaces guided outreach and an uncertain turn is not replayed', async () => {
+  const f = fixture({ idleEnabled: true, idleMinutes: 15, idleStyle: 'self', socialMode: 'friends', maxIdlePerDay: 1 })
+  const attempts = []
+  f.target.followup = (p) => {
+    attempts.push({ prompt: p.content[0].text, reserved: f.store.load().idle })
+    throw new Error('delivery may already have happened')
+  }
+  await f.poller.tick()
+  f.step(900); await f.poller.tick()
+  assert.equal(attempts.length, 1)
+  assert.match(attempts[0].prompt, /由鱼做主.*#1/)
+  assert.match(attempts[0].prompt, /什么都不做/)
+  assert.doesNotMatch(attempts[0].prompt, /主人启用的闲时社交/)
+  assert.equal(attempts[0].reserved, 1)
+  assert.match(f.poller.status().lastDelivery, /不重试/)
+  assert.equal(f.store.load().social, 0)
+  f.poller.stop(); f.poller = f.open()
+  f.step(900); await f.poller.tick()
+  assert.equal(attempts.length, 1)
+})
+
+test('social uses idle and daily quotas and does not replay a failed or uncertain attempt after restart', async () => {
+  const f = fixture({ idleEnabled: true, idleMinutes: 15, maxIdlePerDay: 12,
+    socialMode: 'friends', socialAction: 'greet', socialPreferences: '逛公园',
+    socialIntervalMinutes: 30, maxSocialPerDay: 1 })
+  await f.poller.tick()
+  f.step(900)
+  let submitted = 0
+  f.target.followup = (payload) => {
+    submitted++
+    const msg = payload.content[0].text
+    assert.match(msg, /确认的已有好友/)
+    assert.match(msg, /逛公园/)
+    assert.doesNotMatch(msg, /免费的结伴邀请/)
+    assert.equal(f.store.load().social, 1)
+    throw new Error('unknown result')
+  }
+  await f.poller.tick()
+  assert.equal(submitted, 1)
+  assert.equal(f.poller.status().social, 1)
+  assert.match(f.poller.status().lastDelivery, /投递结果未知/)
+  f.poller.stop()
+  f.poller = f.open()
+  f.target.followup = (payload) => f.deliveries.push(payload.content[0].text)
+  f.step(900); await f.poller.tick()
+  f.step(1800); await f.poller.tick()
+  assert.equal(f.deliveries.length, 2)
+  assert.ok(f.deliveries.every((m) => m.includes('不主动发起新聊天')))
+  assert.equal(f.poller.status().social, 1)
+})
+
+test('social is suppressed while asleep, with missing tools, or during quiet hours', async () => {
+  const f = fixture({ idleEnabled: true, idleMinutes: 15, socialMode: 'nearby', quietStart: '12:30', quietEnd: '13:00' })
+  await f.poller.tick()
+  f.step(900); f.socialReady = false; await f.poller.tick()
+  assert.match(f.deliveries.at(-1)[1].content[0].text, /不主动发起新聊天/)
+  f.socialReady = true
+  f.step(900); await f.poller.tick()
+  assert.equal(f.deliveries.length, 1)
+  f.step(1800); f.state.figure.asleep = true; await f.poller.tick()
+  assert.equal(f.deliveries.length, 1)
+  assert.equal(f.poller.status().social, 0)
+  f.step(120); f.state.figure.asleep = false; await f.poller.tick()
+  f.step(900); await f.poller.tick()
+  assert.match(f.deliveries.at(-1)[1].content[0].text, /当前周围的鱼/)
+  assert.equal(f.poller.status().social, 1)
 })
 
 test('durable queue survives delivery failure, retries once and deduplicates a repeated event', async (t) => {

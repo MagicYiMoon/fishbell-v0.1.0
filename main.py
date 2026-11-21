@@ -30,6 +30,8 @@ from .core import (
     format_notice,
     fresh_state,
     in_quiet_hours,
+    self_directed_instruction,
+    social_instruction,
     wake_prompt,
 )
 from .history import HistoryError, is_mcp_tool, mounted_tool, read_diary, request_tool, tool_text
@@ -39,6 +41,7 @@ from .watch import (
     fish_number,
     idle_blocker,
     on_card_turn_location,
+    plain_text,
     sleep_signal,
     state_brief,
     validated_state,
@@ -50,8 +53,20 @@ STATE_API = WATCH_BASE + "/state"
 MARKER = "fishworld_wake_id"
 IS_TEST = "fishworld_wake_test"
 IS_ALARM = "fishworld_wake_alarm"
+IS_SOCIAL = "fishworld_wake_social"
+IS_SELF_DIRECTED = "fishworld_wake_self_directed"
 FALLBACK_ROWS = "fishworld_fallback_rows"
 TOOL_VISIBILITY_SECONDS = 120
+SELF_TOOLS = (
+    "world_now",
+    "world_history",
+    "world_find",
+    "world_profile",
+    "world_go",
+    "world_do",
+    "world_say",
+    "world_friends",
+)
 tool_result_hook = getattr(filter, "on_llm_tool_respond", None)
 
 
@@ -76,6 +91,12 @@ def settings(config) -> dict:
         "talk_cooldown_seconds": number("talk_cooldown_seconds", 300, 0, 86400),
         "idle_minutes": number("idle_minutes", 0, 0, 1440),
         "max_idle_wakes_per_day": number("max_idle_wakes_per_day", 12, 0, 1000),
+        "idle_style": config.get("idle_style", "guided"),
+        "social_mode": config.get("social_mode", "off"),
+        "social_action": config.get("social_action", "invite"),
+        "social_interval_minutes": number("social_interval_minutes", 180, 30, 1440),
+        "max_social_per_day": number("max_social_per_day", 2, 0, 12),
+        "social_preferences": plain_text(str(config.get("social_preferences", "")), 120),
         "busy_timeout_seconds": number("busy_timeout_seconds", 600, 60, 3600),
         "quiet_start": str(config.get("quiet_start", "")).strip(),
         "quiet_end": str(config.get("quiet_end", "")).strip(),
@@ -88,6 +109,13 @@ def settings(config) -> dict:
     in_quiet_hours(result["quiet_start"], result["quiet_end"], time.time())
     if result["wake_time"] and not HHMM.fullmatch(result["wake_time"]):
         raise ValueError("定时起床请用北京时间 HH:MM，或留空关闭")
+    if result["idle_style"] not in ("guided", "self"):
+        raise ValueError("闲时决定方式无效")
+    if result["social_mode"] not in ("off", "friends", "nearby") or result["social_action"] not in (
+        "greet",
+        "invite",
+    ):
+        raise ValueError("主动社交范围或动作无效")
     return result
 
 
@@ -95,7 +123,7 @@ def settings(config) -> dict:
     "astrbot_plugin_fishworld",
     "Fishworld AstrBot Contributors",
     "鱼铃：鱼世界轮询与自动唤醒",
-    "0.1.1",
+    "0.1.3",
 )
 class FishWorldPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -433,9 +461,15 @@ class FishWorldPlugin(Star):
         event.set_extra(MARKER, uuid.uuid4().hex)
         return adapter, event
 
-    def _dispatch(self, cfg, now, rows, *, idle=False, test=False, alarm=None):
+    def _dispatch(self, cfg, now, rows, *, idle=False, test=False, alarm=None, self_fish=""):
         snapshot = self._fresh_snapshot(cfg, now)
         prompt_state = state_brief(snapshot) if snapshot and not test else ""
+        social = (
+            self._social_plan(cfg, snapshot, now)
+            if idle and cfg["idle_style"] == "guided"
+            else None
+        )
+        deadline = datetime.fromtimestamp(now + TOOL_VISIBILITY_SECONDS, BEIJING)
         adapter, event = self._make_event(
             wake_prompt(
                 rows,
@@ -443,6 +477,13 @@ class FishWorldPlugin(Star):
                 test=test,
                 snapshot=prompt_state,
                 alarm_fish=alarm[2] if alarm else "",
+                social=social_instruction(*social[:4]) if social else "",
+                self_directed=(
+                    self_directed_instruction(self_fish, deadline.strftime("%Y-%m-%d %H:%M:%S"))
+                    if self_fish
+                    else ""
+                ),
+                suppress_idle_outreach=cfg["social_mode"] != "off",
             )
         )
         if test:
@@ -454,6 +495,12 @@ class FishWorldPlugin(Star):
         if alarm:
             event.set_extra(IS_ALARM, (alarm[1], cfg["wake_time"], cfg["mcp_server_name"]))
             state["alarm_day"] = alarm[0]
+        if social:
+            event.set_extra(IS_SOCIAL, social)
+            state["social_count"] += 1
+            state["last_social"] = now
+        if self_fish:
+            event.set_extra(IS_SELF_DIRECTED, (self_fish, cfg["mcp_server_name"], now))
         self.store.consume(rows)
         state["wake_count"] += 1
         state["idle_count"] += int(idle)
@@ -468,15 +515,39 @@ class FishWorldPlugin(Star):
         try:
             adapter.commit_event(event)
         except Exception:
-            if alarm:
+            if alarm or social or self_fish:
                 state["busy"] = None
-                state["last_delivery"] = "闹钟提交结果未知，当天不会自动再试"
+                state["last_delivery"] = "提交结果未知，不自动重试这一轮"
             else:
                 self.store.data = previous
             self._save()
             raise
         if test:
             self.last_tool_result = ""
+
+    def _social_plan(self, cfg, snapshot, now):
+        state = self.store.data
+        mode, server = cfg["social_mode"], cfg["mcp_server_name"]
+        fish = fish_number(snapshot) if snapshot else ""
+        if (
+            mode == "off"
+            or not fish
+            or not server
+            or state["social_count"] >= cfg["max_social_per_day"]
+            or now - state["last_social"] < cfg["social_interval_minutes"] * 60
+        ):
+            return None
+        required = (
+            ("world_now", "world_say", "world_friends")
+            if mode == "friends"
+            else ("world_now", "world_say")
+        )
+        try:
+            if not all(mounted_tool(self.context, name, server) for name in required):
+                return None
+        except (AttributeError, TypeError, RuntimeError):
+            return None
+        return fish, mode, cfg["social_action"], cfg["social_preferences"], server, now
 
     def _mcp_ready(self, now):
         # An unavailable global tool is enough to fall back; its presence doesn't prove
@@ -538,8 +609,19 @@ class FishWorldPlugin(Star):
                     if snapshot and not self.state_error
                     else "没有新鲜状态"
                 )
+                self_fish = ""
+                if not self.idle_status and cfg["idle_style"] == "self":
+                    self_fish = fish_number(snapshot)
+                    try:
+                        available = cfg["mcp_server_name"] and mounted_tool(
+                            self.context, "world_now", cfg["mcp_server_name"]
+                        )
+                    except Exception:
+                        available = False
+                    if not self_fish or not available:
+                        self.idle_status = "无法确认鱼的编号或未挂载对应的 world_now"
                 if not self.idle_status:
-                    self._dispatch(cfg, now, [], idle=True)
+                    self._dispatch(cfg, now, [], idle=True, self_fish=self_fish)
             self.delivery_failures = 0
         except Exception:
             if self.storage_error:
@@ -601,6 +683,93 @@ class FishWorldPlugin(Star):
                                 "会话已收到起床任务，尚未确认实际起床"
                                 if allowed
                                 else "起床任务已失效或目标会话缺少鱼世界工具"
+                            )
+                        elif self_directed := event.get_extra(IS_SELF_DIRECTED):
+                            fish, server, queued_at = self_directed
+                            cfg, now = settings(self.config), time.time()
+                            current = self._fresh_snapshot(cfg, now)
+                            allowed = (
+                                cfg["enabled"]
+                                and not self.store.data["paused"]
+                                and cfg["mode"] == "agent"
+                                and cfg["idle_minutes"] > 0
+                                and cfg["idle_style"] == "self"
+                                and cfg["mcp_server_name"] == server
+                                and 0 <= now - queued_at <= TOOL_VISIBILITY_SECONDS
+                                and not in_quiet_hours(cfg["quiet_start"], cfg["quiet_end"], now)
+                                and current
+                                and not self.state_error
+                                and fish_number(current) == fish
+                                and not idle_blocker(current, now)
+                                and is_mcp_tool(tool, "world_now", server)
+                            )
+                            tools = (
+                                [
+                                    candidate
+                                    for name in SELF_TOOLS
+                                    if is_mcp_tool(
+                                        candidate := request_tool(request, name), name, server
+                                    )
+                                ]
+                                if allowed
+                                else []
+                            )
+                            request.func_tool = type(request.func_tool)(tools) if tools else None
+                            self.store.data["last_delivery"] = (
+                                "会话已收到闲时信号，由鱼决定"
+                                if allowed
+                                else "闲时机会已失效或缺少对应的 world_now"
+                            )
+                        elif social := event.get_extra(IS_SOCIAL):
+                            fish, mode, action, preference, server, queued_at = social
+                            cfg, now = settings(self.config), time.time()
+                            required = (
+                                ("world_now", "world_say", "world_friends")
+                                if mode == "friends"
+                                else ("world_now", "world_say")
+                            )
+                            tools = {
+                                name: request_tool(request, name)
+                                for name in (*required, "world_history")
+                            }
+                            current = self._fresh_snapshot(cfg, now)
+                            allowed = (
+                                cfg["enabled"]
+                                and not self.store.data["paused"]
+                                and cfg["mode"] == "agent"
+                                and cfg["idle_minutes"] > 0
+                                and cfg["idle_style"] == "guided"
+                                and cfg["max_social_per_day"] > 0
+                                and (mode, action, preference, server)
+                                == (
+                                    cfg["social_mode"],
+                                    cfg["social_action"],
+                                    cfg["social_preferences"],
+                                    cfg["mcp_server_name"],
+                                )
+                                and 0 <= now - queued_at <= TOOL_VISIBILITY_SECONDS
+                                and not in_quiet_hours(cfg["quiet_start"], cfg["quiet_end"], now)
+                                and current
+                                and not self.state_error
+                                and fish_number(current) == fish
+                                and not idle_blocker(current, now)
+                                and all(is_mcp_tool(tools[name], name, server) for name in required)
+                            )
+                            request.func_tool = (
+                                type(request.func_tool)(
+                                    [
+                                        tool
+                                        for name, tool in tools.items()
+                                        if is_mcp_tool(tool, name, server)
+                                    ]
+                                )
+                                if allowed
+                                else None
+                            )
+                            self.store.data["last_delivery"] = (
+                                "会话已收到社交机会；未确认实际联系"
+                                if allowed
+                                else "社交任务已失效或缺少同一连接的工具"
                             )
                         elif event.get_extra(IS_TEST):
                             # Limit only this synthetic diagnostic request. Don't alter registered tools.
@@ -697,6 +866,11 @@ class FishWorldPlugin(Star):
             f"待处理：{len(state['pending'])}；服务端 skipped：{self.last_skipped}\n"
             f"今日唤醒：{state['wake_count']}/{cfg['max_wakes_per_day']}；其中闲时：{state['idle_count']}/{cfg['max_idle_wakes_per_day']}\n"
             f"闲时检查：{cfg['idle_minutes']} 分钟（0 为关闭，启用后最少 5 分钟）\n"
+            + (
+                "闲时由鱼做主，专门的社交调度不运行。\n"
+                if cfg["idle_style"] == "self"
+                else f"主动社交：{cfg['social_mode']}；今日机会 {state['social_count']}/{cfg['max_social_per_day']}\n"
+            )
             + (f"上次跳过闲时唤醒：{self.idle_status}\n" if self.idle_status else "")
             + f"免打扰：{in_quiet_hours(cfg['quiet_start'], cfg['quiet_end'], time.time())}；等待模型：{bool(state['busy'])}\n"
             f"投递：{state['last_delivery']}\n"
@@ -795,6 +969,8 @@ class FishWorldPlugin(Star):
                     "day",
                     "wake_count",
                     "idle_count",
+                    "social_count",
+                    "last_social",
                     "talk_at",
                     "last_wake",
                 ):

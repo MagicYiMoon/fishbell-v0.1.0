@@ -10,9 +10,9 @@ repo: https://github.com/MagicYiMoon/fishbell-v0.1.0
 
 ## GitHub Release
 
-- 标题：**鱼铃 v0.1.1｜AstrBot / DeepSeek Harness**
-- 标签：`v0.1.1`
-- 附件：`fishbell-astrbot-0.1.1.zip`、`fishbell-harness-0.1.1.zip` 及各自的 `.zip.sha256`。
+- 标题：**鱼铃 v0.1.3｜AstrBot / DeepSeek Harness**
+- 标签：`v0.1.3`
+- 附件：`fishbell-astrbot-0.1.3.zip`、`fishbell-harness-0.1.3.zip` 及各自的 `.zip.sha256`。
 
 如果重新制作附件，AstrBot ZIP 顶层目录使用 `astrbot_plugin_fishworld/`，其中直接包含根目录的 AstrBot 文件；无需放入 `harness/`。Harness ZIP 只包含 `harness/` 下的内容，将它们放入 `fishworld-harness/`，让 `package.json` 和 `cordis.patch.yml` 直接位于该目录。原先的 AstrBot ZIP 如果仍指向旧仓库，先更新其中的元数据并重新生成 SHA-256，再上传到新仓库。GitHub 生成的 `Source code.zip` 是整仓源码，用户应按宿主选择对应的安装包。
 

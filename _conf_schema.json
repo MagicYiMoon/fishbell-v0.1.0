@@ -15,5 +15,11 @@
   "quiet_end": {"description": "免打扰结束时间", "type": "string", "default": "", "hint": "北京时间 HH:MM，例如 07:00；支持跨午夜，不能与开始时间相同。"},
   "idle_minutes": {"description": "闲时自主生活检查间隔（分钟）", "type": "int", "default": 0, "hint": "0 关闭。可设 20；启用后最小 5 分钟。没有新事件也会调用模型，通过 MCP 了解世界、安排日常，会消耗 token。"},
   "max_idle_wakes_per_day": {"description": "每日闲时唤醒上限", "type": "int", "default": 12, "hint": "同时受每日总上限约束。例如总上限 48、闲时上限 12。"},
+  "idle_style": {"description": "闲时决定方式", "type": "string", "options": ["guided", "self"], "default": "guided", "hint": "self 由鱼自己决定做什么，可照顾自己、玩或找好友；下方专门的社交调度不运行。guided 保留以前的闲时与社交设置。两种都需要开启闲时。"},
+  "social_mode": {"description": "主动社交范围", "type": "string", "options": ["off", "friends", "nearby"], "default": "off", "hint": "需开启闲时自主及 agent 模式。off：不安排专门社交；friends：只找已有好友；nearby：可和当前附近的鱼打招呼。"},
+  "social_action": {"description": "主动社交方式", "type": "string", "options": ["greet", "invite"], "default": "invite", "hint": "greet：仅问候；invite：可择一问候或免费邀约。"},
+  "social_interval_minutes": {"description": "两次主动社交机会最少相隔（分钟）", "type": "int", "default": 180, "hint": "30–1440。也是跨天继续计算的冷却时间。"},
+  "max_social_per_day": {"description": "每天最多安排的社交机会", "type": "int", "default": 2, "hint": "0–12，0 为暂停社交机会。计入闲时和每日总额度；鱼可以选择不联系。"},
+  "social_preferences": {"description": "喜欢的社交活动或聊天话题", "type": "string", "default": "", "hint": "最多 120 字，例如：逛公园、海边散步、聊种菜。作为偏好，不是额外行动授权。"},
   "busy_timeout_seconds": {"description": "等待一轮模型执行的最长时间（秒）", "type": "int", "default": 600, "hint": "范围 60–3600。等待期间不提交其他唤醒。超时后允许处理后续新事件，不重试结果未知的旧批次；工具很慢时请适当调大。"}
 }

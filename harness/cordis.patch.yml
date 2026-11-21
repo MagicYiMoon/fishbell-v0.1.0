@@ -8,3 +8,4 @@
         pauseWhileSleeping: true
         wakeTime: ''
         idleEnabled: false
+        socialMode: 'off'

@@ -54,6 +54,8 @@ window.__ModuleLoader__.load({
         value: cfg[key], disabled: busy, onChange: (e) => set(key, e.target.value === '' ? '' : Number(e.target.value)) }))
       const time = (key, label) => row(label, h('input', { style: control, type: 'time', value: cfg[key], disabled: busy,
         onChange: (e) => set(key, e.target.value) }))
+      const select = (key, label, options) => row(label, h('select', { style: control, value: cfg[key], disabled: busy,
+        onChange: (e) => set(key, e.target.value) }, ...options.map(([value, name]) => h('option', { key: value, value }, name))))
       const { status, sessions, mcp } = saved
       const readAt = (stamp) => stamp ? new Date(stamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '未检查'
       const changed = JSON.stringify(cfg) !== JSON.stringify(saved.config)
@@ -99,9 +101,21 @@ window.__ModuleLoader__.load({
           ...(canWake.includes(key) ? [h('option', { value: 'wake', key: 'wake' }, '允许唤醒')] : []))))),
         h('div', { style: card }, h('strong', null, '闲时自主'),
           flag('idleEnabled', '允许闲时唤醒'),
+          select('idleStyle', '谁决定做什么', [['guided', '沿用现有设置'], ['self', '由鱼做主']]),
           number('idleMinutes', '至少空闲（分钟）', 15, 1440),
           number('maxIdlePerDay', '每天最多闲时唤醒', 0, 24),
-          h('small', null, '默认关闭。设好鱼的授权边界再开启；插件唤醒会话，鱼仍可以决定什么也不做。')),
+          h('small', null, cfg.idleStyle === 'self' ? '鱼自行选择日常活动、找好友或休息；不再单独安排社交。' :
+            '默认关闭。设好鱼的授权边界再开启；插件唤醒会话，鱼仍可以决定什么也不做。')),
+        cfg.idleStyle !== 'self' && h('div', { style: card }, h('strong', null, '主动社交'),
+          select('socialMode', '主动联系谁', [['off', '关闭'], ['friends', '仅已有好友'], ['nearby', '当前附近的鱼']]),
+          select('socialAction', '允许做什么', [['greet', '只打招呼'], ['invite', '问候或免费邀约']]),
+          number('socialIntervalMinutes', '社交机会最短间隔（分钟）', 30, 1440),
+          number('maxSocialPerDay', '每天最多社交机会', 0, 12),
+          row('活动偏好', h('input', { style: control, maxLength: 120, value: cfg.socialPreferences, disabled: busy,
+            placeholder: '例如：逛公园、聊种菜', onChange: (e) => set('socialPreferences', e.target.value) })),
+          h('p', null, cfg.socialMode !== 'off' && !cfg.idleEnabled ? '还需要开启上方的「允许闲时唤醒」。' :
+            '默认关闭。机会计入闲时与总额度；鱼可以决定不联系。'),
+          h('small', null, `今天已安排 ${status.social ?? 0} 次社交机会；不代表实际发出了消息。`)),
         h('div', { style: { display: 'flex', gap: 10 } }, button('保存设置', 'save', !changed), button('重新读取', 'refresh')),
         h('p', { role: 'status' }, msg))
     }

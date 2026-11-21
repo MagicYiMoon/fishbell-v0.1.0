@@ -23,6 +23,12 @@ export const Config = Schema.object({
   idleEnabled: Schema.boolean().default(false),
   idleMinutes: number('idleMinutes', 15, 1440),
   maxIdlePerDay: number('maxIdlePerDay', 0, 24),
+  idleStyle: Schema.string().default(DEFAULTS.idleStyle),
+  socialMode: Schema.string().default(DEFAULTS.socialMode),
+  socialAction: Schema.string().default(DEFAULTS.socialAction),
+  socialIntervalMinutes: number('socialIntervalMinutes', 30, 1440),
+  maxSocialPerDay: number('maxSocialPerDay', 0, 12),
+  socialPreferences: Schema.string().default(''),
   eventModes: Schema.object(Object.fromEntries(Object.keys(EVENTS).map((k) =>
     [k, Schema.string().default(defaultMode(k))]))).default({}),
 })
@@ -41,12 +47,14 @@ export function mcpDiagnostic(tools, agent) {
   } catch { return { state: 'unknown', message: '读取目标会话的可见工具失败' } }
 }
 
-function alarmToolsReady(tools, agent) {
+function matchingToolsReady(tools, agent, required) {
   try {
     const names = tools.schemas(agent).map(({ name }) => name).filter((name) => typeof name === 'string')
     const now = names.filter((name) => name === 'world_now' || /^mcp__[^\s]+__world_now$/.test(name))
-    const act = names.filter((name) => name === 'world_do' || /^mcp__[^\s]+__world_do$/.test(name))
-    return now.length === 1 && act.length === 1 && act[0] === now[0].replace(/world_now$/, 'world_do')
+    return now.length === 1 && required.every((name) => {
+      const group = names.filter((tool) => tool === name || tool.startsWith('mcp__') && tool.endsWith('__' + name))
+      return group.length === 1 && group[0] === now[0].replace(/world_now$/, name)
+    })
   } catch { return false }
 }
 
@@ -58,7 +66,9 @@ export function apply(ctx, config) {
   const fallback = join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'fishworld-harness')
   const poller = new Poller({ ...config, stateDirectory: config.stateDirectory || fallback }, {
     roots, mcpReady: (agent) => mcpDiagnostic(ctx.tools, agent).state === 'visible',
-    alarmReady: (agent) => alarmToolsReady(ctx.tools, agent),
+    alarmReady: (agent) => matchingToolsReady(ctx.tools, agent, ['world_do']),
+    socialReady: (agent, mode) => matchingToolsReady(ctx.tools, agent,
+      mode === 'friends' ? ['world_friends', 'world_say'] : ['world_say']),
   })
   const diagnostic = () => mcpDiagnostic(ctx.tools, poller.target())
   function tool(key, description, execute) {

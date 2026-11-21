@@ -1,7 +1,7 @@
 name: astrbot_plugin_fishworld
 display_name: 鱼铃
 desc: 为 NapCat + AstrBot 提供鱼世界事件通知、睡眠暂停、定时起床、MCP 自动唤醒及只读看鱼命令。
-version: v0.1.1
+version: v0.1.3
 author: Fishworld AstrBot Contributors
 repo: https://github.com/MagicYiMoon/fishbell-v0.1.0
 support_platforms:

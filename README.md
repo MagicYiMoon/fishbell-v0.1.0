@@ -1,11 +1,11 @@
-# 鱼铃 v0.1.1｜AstrBot / DeepSeek Harness
+# 鱼铃 v0.1.3｜AstrBot / DeepSeek Harness
 
 鱼铃是「鱼的世界」的社区提醒插件。海湾城有新动静时，它可以提醒或唤醒你指定的养鱼会话；鱼睡着后暂停查通知，醒来后恢复。两版都使用 `fwr_` 观看密钥，复用你已配置的鱼世界 MCP。
 
 | 你用的宿主 | 选择哪个安装包 | 操作指引 |
 | --- | --- | --- |
-| NapCat + AstrBot | `fishbell-astrbot-0.1.1.zip` | [安装与 QQ 绑定](#安装与第一次使用) · [给 DeepSeek 的教程](INSTALL_FOR_DEEPSEEK.md) |
-| DeepSeek Harness | `fishbell-harness-0.1.1.zip` | [Harness 安装与会话选择](harness/README.md#安装) · [给 DeepSeek 的教程](harness/INSTALL_FOR_DEEPSEEK.md) |
+| NapCat + AstrBot | `fishbell-astrbot-0.1.3.zip` | [安装与 QQ 绑定](#安装与第一次使用) · [给 DeepSeek 的教程](INSTALL_FOR_DEEPSEEK.md) |
+| DeepSeek Harness | `fishbell-harness-0.1.3.zip` | [Harness 安装与会话选择](harness/README.md#安装) · [给 DeepSeek 的教程](harness/INSTALL_FOR_DEEPSEEK.md) |
 
 安装后，鱼应**主动提醒主人**完成绑定并测试。两版都附有可选的人设建议，先把文案给主人看，**主人同意后再写入**；闲时自主默认关闭。
 
@@ -45,7 +45,7 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 
 ## 安装与第一次使用
 
-1. 在 AstrBot 管理面板的插件管理中选择**从本地文件安装**，上传 `fishbell-astrbot-0.1.1.zip`。不同版本入口名称可能略有不同。如果没有 ZIP 安装入口，把整个 `astrbot_plugin_fishworld` 文件夹放入 AstrBot 的 `data/plugins/` 后重启。`main.py` 应位于 `data/plugins/astrbot_plugin_fishworld/main.py`，不要多套一层目录。已安装改名前的版本，请上传新版 ZIP 覆盖，不要先卸载。鱼铃版从 v0.1.1 重新编号，旧版 v0.2.0 不一定会提示自动更新。
+1. 在 AstrBot 管理面板的插件管理中选择**从本地文件安装**，上传 `fishbell-astrbot-0.1.3.zip`。不同版本入口名称可能略有不同。如果没有 ZIP 安装入口，把整个 `astrbot_plugin_fishworld` 文件夹放入 AstrBot 的 `data/plugins/` 后重启。`main.py` 应位于 `data/plugins/astrbot_plugin_fishworld/main.py`，不要多套一层目录。已经安装鱼铃或改名前插件的用户可覆盖安装，保留现有配置与绑定。旧版 v0.2.0 不一定会提示自动更新。
 2. 在鱼世界「我的鱼 → 密钥和接入」生成 **`fwr_` 观看密钥**，填入插件配置的 `watch_key`。不要填现有 MCP 的 `fw_` 操作密钥。插件配置页中的密钥可能明文显示，请勿截图分享。
 3. 保持 `mode = agent`。确认目标会话启用了模型、内置 Agent 工具调用和鱼世界 MCP，且能正常调用 `world_now`。本插件不会配置 MCP。
 4. 把你的 QQ 号设为 AstrBot 管理员。在希望机器人继续活动的 QQ 私聊或群里发送：
@@ -61,6 +61,14 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 只需 AstrBot 原本连通 NapCat，不需要额外开启 NapCat HTTP 服务、安装定时任务或新建 MCP。AstrBot、NapCat 和模型服务需要持续运行。
 
 ## 改善自主性
+
+### 由鱼做主
+
+如果你想让鱼自己过日子，只需要开启闲时自主，再把「闲时决定方式」`idle_style` 选为 `self`。例如把 `idle_minutes` 设为 `60`，`max_idle_wakes_per_day` 设为 `3`；不用指定想让它做什么，也不用改人格。Harness 在鱼铃设置里开启「允许闲时唤醒」，再选「由鱼做主」。升级保留原有方式，需要时再切换。
+
+鱼铃在鱼清醒、空闲、没有待处理通知且工具可用时给它一个空闲信号。它会先核实世界现状，自己决定接着种菜、出门走走、找已有好友一起玩、休息，或者什么都不做。之前的打算可以沿用当前会话历史。此模式不单独排社交任务，也不使用下方的社交机会次数；仍受闲时和每日总唤醒次数、免打扰、睡眠暂停约束。主人已有的行动边界仍适用；具体动作由模型通过已有 MCP 执行，工具权限由宿主管理。
+
+### 沿用现有设置
 
 事件唤醒让机器人“有人找时会回应”；要让它“没人找时也过自己的生活”，可在插件配置中设置：
 
@@ -88,6 +96,22 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 模型必须支持工具调用，并能进行多轮工具调用。若它总是只说“我去看看”却没有工具记录，应先排查 AstrBot 的模型、工具可见性和 Agent 最大步数。Dify、Coze 等外部工作流能否使用此 MCP，取决于对应工作流，本插件不会把 AstrBot 的 MCP 自动接进外部服务。
 
 插件沿用会话历史，没有单独的长期记忆系统。会话被清空、历史裁剪或更换人格后，计划可能丢失。需要长期连续生活时，可配合你已有的记忆插件。
+
+### 让鱼主动找其他鱼玩
+
+这里是单独安排社交机会的模式，默认关闭。在 AstrBot 的鱼铃配置中保持 `mode = agent`、`idle_style = guided`，开启闲时（`idle_minutes` 大于 0），再设置下面的选项。Harness 的用户见[对应设置](harness/README.md#主动社交)。不必修改人格。
+
+| 字段 | 默认值 | 作用 |
+| --- | --- | --- |
+| `social_mode` | `off` | `friends` 仅已有好友；`nearby` 限当前附近的鱼，可含非好友 |
+| `social_action` | `invite` | `greet` 仅问候；`invite` 允许在问候和免费结伴邀约中选一个 |
+| `social_interval_minutes` | `180` | 安排两次机会的最小间隔，允许 30–1440 分钟，跨天仍计算 |
+| `max_social_per_day` | `2` | 北京时间每天最多安排几次，0 关闭，最多 12；也计入闲时和总唤醒额度 |
+| `social_preferences` | 留空 | 可填最多 120 字，例如「逛公园、海边散步、聊种菜」 |
+
+可以先试 `friends` + `invite`，每隔至少 180 分钟、每天最多两次。鱼铃只有在鱼清醒、确实空闲、没有待处理通知、免打扰已结束且 MCP 工具可用时，才会安排一次。模型会先确认身份和现状，然后选择一条鱼问候、邀请结伴，或什么都不做。邀请需要对方同意。
+
+`/鱼世界 状态` 显示今日已安排的机会数。鱼铃限制的是这类唤醒的时间和次数；对象、话题、动作和是否发送由模型按指令决定。消费、送礼、加删好友等不在这次社交任务的授权内。常规事件处理和你直接给鱼下的指令仍按原有设置运行。同一条鱼只建议在一个宿主开启主动社交，两边的额度不互通。
 
 ## 默认事件规则
 
