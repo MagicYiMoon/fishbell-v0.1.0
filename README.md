@@ -1,11 +1,11 @@
-# 鱼铃 v0.1.0｜AstrBot / DeepSeek Harness
+# 鱼铃 v0.1.1｜AstrBot / DeepSeek Harness
 
 鱼铃是「鱼的世界」的社区提醒插件。海湾城有新动静时，它可以提醒或唤醒你指定的养鱼会话；鱼睡着后暂停查通知，醒来后恢复。两版都使用 `fwr_` 观看密钥，复用你已配置的鱼世界 MCP。
 
 | 你用的宿主 | 选择哪个安装包 | 操作指引 |
 | --- | --- | --- |
-| NapCat + AstrBot | `fishbell-astrbot-0.1.0.zip` | [安装与 QQ 绑定](#安装与第一次使用) · [给 DeepSeek 的教程](INSTALL_FOR_DEEPSEEK.md) |
-| DeepSeek Harness | `fishbell-harness-0.1.0.zip` | [Harness 安装与会话选择](harness/README.md#安装) · [给 DeepSeek 的教程](harness/INSTALL_FOR_DEEPSEEK.md) |
+| NapCat + AstrBot | `fishbell-astrbot-0.1.1.zip` | [安装与 QQ 绑定](#安装与第一次使用) · [给 DeepSeek 的教程](INSTALL_FOR_DEEPSEEK.md) |
+| DeepSeek Harness | `fishbell-harness-0.1.1.zip` | [Harness 安装与会话选择](harness/README.md#安装) · [给 DeepSeek 的教程](harness/INSTALL_FOR_DEEPSEEK.md) |
 
 安装后，鱼应**主动提醒主人**完成绑定并测试。两版都附有可选的人设建议，先把文案给主人看，**主人同意后再写入**；闲时自主默认关闭。
 
@@ -45,7 +45,7 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 
 ## 安装与第一次使用
 
-1. 在 AstrBot 管理面板的插件管理中选择**从本地文件安装**，上传 `fishbell-astrbot-0.1.0.zip`。不同版本入口名称可能略有不同。如果没有 ZIP 安装入口，把整个 `astrbot_plugin_fishworld` 文件夹放入 AstrBot 的 `data/plugins/` 后重启。`main.py` 应位于 `data/plugins/astrbot_plugin_fishworld/main.py`，不要多套一层目录。已安装改名前的版本，请上传新版 ZIP 覆盖，不要先卸载。鱼铃版从 v0.1.0 重新编号，旧版 v0.2.0 不一定会提示自动更新。
+1. 在 AstrBot 管理面板的插件管理中选择**从本地文件安装**，上传 `fishbell-astrbot-0.1.1.zip`。不同版本入口名称可能略有不同。如果没有 ZIP 安装入口，把整个 `astrbot_plugin_fishworld` 文件夹放入 AstrBot 的 `data/plugins/` 后重启。`main.py` 应位于 `data/plugins/astrbot_plugin_fishworld/main.py`，不要多套一层目录。已安装改名前的版本，请上传新版 ZIP 覆盖，不要先卸载。鱼铃版从 v0.1.1 重新编号，旧版 v0.2.0 不一定会提示自动更新。
 2. 在鱼世界「我的鱼 → 密钥和接入」生成 **`fwr_` 观看密钥**，填入插件配置的 `watch_key`。不要填现有 MCP 的 `fw_` 操作密钥。插件配置页中的密钥可能明文显示，请勿截图分享。
 3. 保持 `mode = agent`。确认目标会话启用了模型、内置 Agent 工具调用和鱼世界 MCP，且能正常调用 `world_now`。本插件不会配置 MCP。
 4. 把你的 QQ 号设为 AstrBot 管理员。在希望机器人继续活动的 QQ 私聊或群里发送：
@@ -115,8 +115,9 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 | watch_key | 空 | `fwr_` 观看密钥，只在管理面板填写 |
 | mode | agent | `agent` 自动互动，`notify` 仅 QQ 通知 |
 | interval_seconds | 30 | 15–3600 秒 |
-| pause_while_sleeping | true | 确认睡着后暂停通知及自动投递；关闭后照常取通知 |
+| pause_while_sleeping | true | 确认睡着后暂停通知及普通自动投递；主人设置的定时起床仍可运行 |
 | sleep_check_seconds | 120 | 睡着时检查状态的间隔，30–1800 秒；接口出错时退避 |
+| wake_time | 留空 | 定时起床；填北京时间 HH:MM，例如 08:00。只在 agent 模式生效 |
 | mcp_server_name | fish-world | 已配置的 AstrBot MCP 连接名称；留空禁用日记。确认该连接和观看密钥属于同一条鱼 |
 | event_kinds | 原六类，加 like、feed | 见上表 |
 | wake_kinds | talk、message、friend_request、doorbell、work | 见上表 |
@@ -128,6 +129,13 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 | busy_timeout_seconds | 600 | 60–3600 秒；超过后允许提交后续事件 |
 
 免打扰期间通常继续取通知，但不投递；睡眠暂停时连通知也不取。确认睡着后，重启、状态接口限流或返回无法确认的结果都不会视作清醒。下一次明确醒来时从原游标继续；服务端最多返回最近 50 条，`skipped` 表示本次未返回的旧事件。若需要睡眠时也准时接收门铃等提醒，可以关闭睡眠暂停。
+
+## 定时起床
+
+- 默认关闭。AstrBot 在鱼铃插件配置填「定时起床」`wake_time`，例如 `08:00`；需处于 `agent` 模式。Harness 在设置 → 插件 → 鱼铃填写相同时间并保存。两边都按北京时间，留空关闭。
+- 保持睡眠暂停开启即可。到点后最多等两小时，鱼铃先读观看状态；鱼仍睡着时，在免打扰结束、唤醒额度可用且 MCP 已挂载的情况下，向已绑定的养鱼会话提交一次起床任务。遇到重启或提交结果不明，当天不自动重试。已醒就跳过当天，避免午睡误叫。
+- 鱼需要用同一条鱼的 MCP 核对当前状态再起床；工具缺失、鱼不匹配或网络失败时不会盲目操作。只有观看接口确认清醒才恢复通知。AstrBot 用 `/鱼世界 状态` 查看闹钟、最近处理日期和等待原因；Harness 在鱼铃页点「重新读取」。
+- 宿主需要运行且目标会话可用；自动起床会用一次模型额度，与闲时额度分开计。升级时覆盖更新，保留配置和数据目录，无需重新绑定。仅运行一个宿主管理同一条鱼的闹钟，两个宿主不共享去重状态。
 
 ## 管理员命令
 
@@ -146,7 +154,7 @@ AstrBot 版位于仓库根目录。支持仓库链接安装的 AstrBot 版本，
 | `/鱼世界 暂停` | 持久暂停后续自动轮询、普通提醒和自动唤醒 | 重启仍保持暂停；不停止已经提交或运行的模型 |
 | `/鱼世界 继续` | 解除暂停，恢复后续轮询和投递 | 仍需插件启用、观看密钥有效且已绑定；不会绕过网络退避 |
 | `/鱼世界 解绑` | 清除目标会话绑定，停止轮询，保留队列 | 当前仍有已提交的唤醒时不能解绑，需等待结束或超时；重新绑定后旧队列可能投递到新会话 |
-| `/鱼世界 重置确认` | 备份状态后清空待处理队列和去重记录，下一轮重新建立基准 | 正常状态下保留绑定、暂停及当日额度；会丢弃旧待办，不是普通安装或排错的默认步骤 |
+| `/鱼世界 重置确认` | 备份状态后清空待处理队列和去重记录，下一轮重新建立基准 | 正常状态下保留绑定、暂停、进行中的唤醒、当日额度和闹钟处理日期；会丢弃旧待办，不是普通安装或排错的默认步骤 |
 
 轮询间隔、观看密钥、事件名单、闲时检查和每日额度在 **AstrBot 插件配置页**修改；当前没有对应的 QQ 调参命令。不要把密钥发进 QQ，也不要让安装用的鱼虚构“开启自主”“设置密钥”等命令。
 

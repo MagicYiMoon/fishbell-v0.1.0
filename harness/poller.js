@@ -14,9 +14,13 @@ const MAX_PENDING = 500
 const QUICK = { doorbell: 180_000, work: 180_000, cards: 120_000 }
 const HASH = /^[a-f0-9]{64}$/
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+const ALARM_WINDOW = 7_200_000
+const AWAKE_POSES = new Set(('stand front sit-front sit bike squat drink eat eat-stand read-sit read gaze knit write ' +
+  'mask footbath jog stretch kite sweep wipe toss aim water brush stroll wade talk eat-hand ' +
+  'fish fish-sit fish-lamp fish-sit-lamp walk').split(' '))
 export const DEFAULTS = {
   enabled: true, sessionId: '', intervalSeconds: 30, sleepCheckSeconds: 120,
-  pauseWhileSleeping: true, maxWakesPerDay: 12, talkCooldownSeconds: 300,
+  pauseWhileSleeping: true, wakeTime: '', maxWakesPerDay: 12, talkCooldownSeconds: 300,
   quietStart: '', quietEnd: '', idleEnabled: false, idleMinutes: 60, maxIdlePerDay: 3,
 }
 export const defaultMode = (kind) => kind === 'cards' ? 'off' :
@@ -33,6 +37,16 @@ const localClock = new Intl.DateTimeFormat('en-GB', {
 function clock(now) {
   const p = Object.fromEntries(localClock.formatToParts(now).map(({ type, value }) => [type, value]))
   return { day: `${p.year}-${p.month}-${p.day}`, minute: `${p.hour}:${p.minute}` }
+}
+function alarmSlot(value, now) {
+  if (!value) return null
+  let day = clock(now).day
+  let at = Date.parse(`${day}T${value}:00+08:00`)
+  if (at > now) {
+    at -= 86_400_000
+    day = clock(at).day
+  }
+  return now - at < ALARM_WINDOW ? { day, at } : null
 }
 
 export function normalize(input) {
@@ -55,6 +69,7 @@ export function normalize(input) {
       (!TIME.test(out.quietStart) || !TIME.test(out.quietEnd) || out.quietStart === out.quietEnd)) {
     throw new Error('免打扰请填写两个不同的 HH:MM 时间，或同时留空')
   }
+  if (out.wakeTime && !TIME.test(out.wakeTime)) throw new Error('定时起床请用北京时间 HH:MM，或留空关闭')
   if (input.eventModes !== undefined && !obj(input.eventModes)) throw new Error('事件设置无效')
   for (const kind of Object.keys(EVENTS)) {
     const mode = input.eventModes?.[kind] ?? defaultMode(kind)
@@ -74,10 +89,10 @@ export function sleepSignal(state) {
   const { asleep, pose } = state?.figure ?? {}
   if (typeof asleep === 'boolean') return asleep
   if (state?.stage === 'onboarding') return false
-  return pose === 'sleep' ? true : typeof pose === 'string' && pose && pose !== 'doze' ? false : null
+  return pose === 'sleep' ? true : AWAKE_POSES.has(pose) ? false : null
 }
 function fresh(now) {
-  return { version: 1, cursor: '', sleeping: false, pending: [], seen: [], talkAt: [],
+  return { version: 1, cursor: '', sleeping: false, alarmDay: '', pending: [], seen: [], talkAt: [],
     day: clock(now).day, wakes: 0, idle: 0, activeAt: now }
 }
 export function fileStore(key, folder) {
@@ -93,6 +108,7 @@ export function fileStore(key, folder) {
       const s = JSON.parse(json)
       if (!obj(s) || s.version !== 1 || typeof s.cursor !== 'string' || s.cursor.length > 256 ||
           typeof s.sleeping !== 'boolean' || !Number.isFinite(s.activeAt) ||
+          (s.alarmDay !== undefined && (typeof s.alarmDay !== 'string' || (s.alarmDay && !/^\d{4}-\d\d-\d\d$/.test(s.alarmDay)))) ||
           !/^\d{4}-\d\d-\d\d$/.test(s.day) || ![s.wakes, s.idle].every((x) => Number.isSafeInteger(x) && x >= 0) ||
           !Array.isArray(s.pending) || s.pending.length > MAX_PENDING ||
           !s.pending.every((p) => obj(p) && HASH.test(p.id) && Object.hasOwn(EVENTS, p.kind) &&
@@ -102,7 +118,7 @@ export function fileStore(key, folder) {
           !s.talkAt.every((pair) => Array.isArray(pair) && pair.length === 2 && HASH.test(pair[0]) && Number.isFinite(pair[1]))) {
         throw new Error('缓存格式无效')
       }
-      return s
+      return { alarmDay: '', ...s }
     },
     save(state) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
@@ -172,7 +188,7 @@ function activityUntil(state) {
   if (typeof until === 'number') return until < 1e12 ? until * 1000 : until
   return typeof until === 'string' ? Date.parse(until) : NaN
 }
-function message(mode, rows = []) {
+function message(mode, rows = [], alarm) {
   const counts = new Map()
   for (const { kind } of rows) counts.set(kind, (counts.get(kind) ?? 0) + 1)
   const summary = [...counts].map(([kind, n]) => `${EVENTS[kind]} × ${n}`).join('、')
@@ -180,6 +196,7 @@ function message(mode, rows = []) {
   const instruction = ({
     test: '本次为只读测试。只调用已接入的鱼世界 MCP 的 world_now 检查现状，说明成功或报错。不要发言、接任务、移动或消费。',
     idle: '到了闲时检查时间。先用鱼世界 MCP 的 world_now 确认当前状态；如果确实空闲，只在主人已明确授权的范围内决定是否继续日常活动。允许什么都不做。',
+    alarm: alarm && `这是主人启用的定时起床，超过北京时间 ${alarm.expires} 就不要执行。先用鱼世界 MCP 的 world_now 核对是鱼 ${alarm.fish} 且此刻仍在睡觉。若已经醒、编号不符、状态没有返回或工具不可用，停止并说明。只有确认同一条鱼仍睡着，才按当前 world_do 工具说明执行一次起床；不猜参数、不重试、不做其它动作。用只读工具确认实际结果。`,
     wake: '先用鱼世界 MCP 的 world_now 核实事件是否仍有效，再按主人已有授权处理。牌局仅限已经参与而且确实轮到自己的牌局。',
     notice: '这些事件仅供知晓，无需因此发起行动。',
   })[mode]
@@ -189,12 +206,14 @@ function message(mode, rows = []) {
 }
 
 export class Poller {
-  constructor(raw, { request = watchRequest, roots = () => [], mcpReady = () => false, now = Date.now, store } = {}) {
+  constructor(raw, { request = watchRequest, roots = () => [], mcpReady = () => false,
+    alarmReady = () => false, now = Date.now, store } = {}) {
     this.config = normalize(raw)
     this.key = typeof raw.key === 'string' ? raw.key.trim() : ''
     this.request = request
     this.roots = roots
     this.mcpReady = mcpReady
+    this.alarmReady = alarmReady
     this.now = now
     this.store = store ?? (validKey(this.key) ? fileStore(this.key, raw.stateDirectory) : null)
     this.controller = new AbortController()
@@ -215,6 +234,7 @@ export class Poller {
       canInject: typeof target?.inject === 'function', canWake: typeof target?.followup === 'function',
       initialized: Boolean(s.cursor),
       sleeping: this.config.pauseWhileSleeping && s.sleeping,
+      alarmDay: s.alarmDay || '', alarmStatus: this.config.wakeTime ? this.alarmStatus || '' : '',
       lastStateAt: this.timing.lastState, lastNotifyAt: this.timing.lastNotify,
       nextStateAt: this.timing.state, nextNotifyAt: this.timing.notify,
       pending: s.pending.length, wakes: matchingDay ? s.wakes : 0, idle: matchingDay ? s.idle : 0,
@@ -267,7 +287,10 @@ export class Poller {
     try {
       const wasSleeping = this.state.sleeping && cfg.pauseWhileSleeping
       const awakeInterval = Math.min(60, cfg.intervalSeconds) * 1000
-      if (this.now() >= this.timing.state) {
+      const slot = alarmSlot(cfg.wakeTime, this.now())
+      const needsAlarmState = slot && (this.state.alarmDay || '') < slot.day &&
+        !this.timing.errors.state && this.timing.lastState < slot.at && this.state.sleeping
+      if (this.now() >= this.timing.state || needsAlarmState) {
         await this.query('state', wasSleeping ? cfg.sleepCheckSeconds * 1000 : awakeInterval, (state, now) => {
           if (!obj(state) || typeof state.fish !== 'string' || !state.fish) throw new WatchFailure('状态格式不符')
           this.snapshot = state
@@ -278,10 +301,15 @@ export class Poller {
           }
           if (cfg.pauseWhileSleeping && signal === true) this.timing.state = now + cfg.sleepCheckSeconds * 1000
           if (wasSleeping && signal === false) this.timing.state = now + awakeInterval
+          if (signal === false && this.awaitingAlarmState) {
+            this.awaitingAlarmState = false
+            this.alarmStatus = '观看接口已确认鱼醒了'
+          }
         })
       }
-      if (this.storageError || this.controller.signal.aborted || this.config !== cfg ||
-          (cfg.pauseWhileSleeping && this.state.sleeping)) return
+      if (this.storageError || this.controller.signal.aborted || this.config !== cfg || this.target() !== target) return
+      if (await this.checkAlarm(target, cfg) || this.storageError || this.controller.signal.aborted ||
+          this.config !== cfg || this.target() !== target || (cfg.pauseWhileSleeping && this.state.sleeping)) return
       if (this.now() >= this.timing.notify && this.state.pending.length <= MAX_PENDING - 50) {
         await this.query('notify', cfg.intervalSeconds * 1000, (data, now) => {
           const next = structuredClone(this.state)
@@ -293,6 +321,45 @@ export class Poller {
           this.target() !== target) return
       await this.deliver(target, cfg)
     } finally { this.busy = false }
+  }
+  async checkAlarm(target, cfg) {
+    const now = this.now(), slot = alarmSlot(cfg.wakeTime, now), s = this.state
+    if (!slot || (s.alarmDay || '') >= slot.day) return false
+    const signal = sleepSignal(this.snapshot)
+    const fish = this.snapshot?.fish?.trim().match(/#[0-9]{1,16}$/)?.[0]
+    const checked = this.timing.lastState
+    const day = clock(now).day
+    const wakes = day === s.day ? s.wakes : 0
+    if (this.timing.errors.state || checked < slot.at || checked > now || now - checked > (cfg.sleepCheckSeconds + 10) * 1000) {
+      this.alarmStatus = '等待到点后的有效状态'
+    } else if (signal === false) {
+      this.alarmStatus = '确认已醒，今天无需闹钟'
+      this.save({ ...s, alarmDay: slot.day })
+    } else if (signal !== true || !fish) {
+      this.alarmStatus = '无法确认睡眠或鱼的编号'
+    } else if (quiet(cfg, now)) {
+      this.alarmStatus = '免打扰中'
+    } else if (target.status !== 'idle') {
+      this.alarmStatus = '等待会话空闲'
+    } else if (wakes >= cfg.maxWakesPerDay) {
+      this.alarmStatus = '每日唤醒额度不足'
+    } else if (typeof target.followup !== 'function' || !this.alarmReady(target)) {
+      this.alarmStatus = '目标会话未挂载同一组 world_now 和 world_do'
+    } else {
+      // Record the attempt before invoking the host. A restart or lost response cannot repeat it.
+      if (!this.save({ ...s, alarmDay: slot.day, day, wakes: wakes + 1,
+        idle: day === s.day ? s.idle : 0, activeAt: now })) return false
+      const expiry = clock(slot.at + ALARM_WINDOW)
+      try {
+        const result = await target.followup(message('alarm', [], { fish, expires: `${expiry.day} ${expiry.minute}` }))
+        this.awaitingAlarmState = result !== false
+        this.alarmStatus = result === false ? '宿主未接受起床任务，今天不再自动提交' : '已提交起床任务，等待鱼世界状态确认'
+      } catch {
+        this.alarmStatus = '提交结果未知，今天不再自动提交'
+      }
+      return true
+    }
+    return false
   }
   async deliver(target, cfg) {
     const now = this.now()
@@ -330,7 +397,7 @@ export class Poller {
     if (cfg.idleEnabled && idle < cfg.maxIdlePerDay && s.cursor && stateFresh &&
         !this.timing.errors.notify && now - this.timing.lastNotify <= cfg.intervalSeconds * 2000 &&
         sleepSignal(this.snapshot) === false && (!this.snapshot.stage || this.snapshot.stage === 'live') &&
-        this.snapshot.where?.kind === 'place' && !this.snapshot.doing?.name &&
+        ['place', 'home', 'visit'].includes(this.snapshot.where?.kind) && !this.snapshot.doing?.name &&
         !(activityUntil(this.snapshot) > now) && now - s.activeAt >= cfg.idleMinutes * 60_000 && canWake()) {
       await this.send(target, 'idle', [], day)
     }
@@ -368,9 +435,15 @@ export class Poller {
   async test() {
     const target = this.target()
     if (typeof target?.followup !== 'function') return { ok: false, message: '请先选择支持唤醒的会话' }
-    if (this.busy || target.status === 'running' || this.controller.signal.aborted) return { ok: false, message: '当前有检查正在进行或会话忙，请稍后再试' }
+    if (this.busy || target.status !== 'idle' || this.controller.signal.aborted) return { ok: false, message: '当前有检查正在进行或会话忙，请稍后再试' }
+    if (!this.store || this.storageError) return { ok: false, message: '请先配置观看密钥，并检查本机缓存' }
+    const s = this.state, day = clock(this.now()).day, wakes = s.day === day ? s.wakes : 0
+    if (wakes >= this.config.maxWakesPerDay) return { ok: false, message: '今日唤醒额度已用完' }
     this.busy = true
     try {
+      if (!this.save({ ...s, day, wakes: wakes + 1, idle: day === s.day ? s.idle : 0 })) {
+        return { ok: false, message: '不能记录额度，未提交测试' }
+      }
       const result = await target.followup(message('test'))
       return { ok: result !== false, message: result === false ? '宿主拒绝唤醒' : '已提交只读测试；请到目标会话查看 world_now 的实际结果' }
     } catch { return { ok: false, message: '宿主未接受测试唤醒' } }

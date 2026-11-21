@@ -17,22 +17,26 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 from .core import (
+    ALARM_WINDOW_SECONDS,
     BEIJING,
     DEFAULT_EVENTS,
     DEFAULT_WAKE,
+    HHMM,
     KINDS,
     MAX_PENDING,
     StateStore,
+    alarm_slot,
     day_at,
     format_notice,
     fresh_state,
     in_quiet_hours,
     wake_prompt,
 )
-from .history import HistoryError, read_diary, request_tool, tool_text
+from .history import HistoryError, is_mcp_tool, mounted_tool, read_diary, request_tool, tool_text
 from .watch import (
     WATCH_BASE,
     WatchError,
+    fish_number,
     idle_blocker,
     on_card_turn_location,
     sleep_signal,
@@ -45,6 +49,7 @@ API = WATCH_BASE + "/notify"
 STATE_API = WATCH_BASE + "/state"
 MARKER = "fishworld_wake_id"
 IS_TEST = "fishworld_wake_test"
+IS_ALARM = "fishworld_wake_alarm"
 FALLBACK_ROWS = "fishworld_fallback_rows"
 TOOL_VISIBILITY_SECONDS = 120
 tool_result_hook = getattr(filter, "on_llm_tool_respond", None)
@@ -65,6 +70,7 @@ def settings(config) -> dict:
         "interval_seconds": number("interval_seconds", 30, 15, 3600),
         "pause_while_sleeping": bool(config.get("pause_while_sleeping", True)),
         "sleep_check_seconds": number("sleep_check_seconds", 120, 30, 1800),
+        "wake_time": str(config.get("wake_time", "")).strip(),
         "mcp_server_name": str(config.get("mcp_server_name", "fish-world")).strip(),
         "max_wakes_per_day": number("max_wakes_per_day", 48, 0, 1000),
         "talk_cooldown_seconds": number("talk_cooldown_seconds", 300, 0, 86400),
@@ -80,6 +86,8 @@ def settings(config) -> dict:
             raise ValueError(f"{name} 应为已知事件类型列表")
         result[name] = set(value)
     in_quiet_hours(result["quiet_start"], result["quiet_end"], time.time())
+    if result["wake_time"] and not HHMM.fullmatch(result["wake_time"]):
+        raise ValueError("定时起床请用北京时间 HH:MM，或留空关闭")
     return result
 
 
@@ -87,7 +95,7 @@ def settings(config) -> dict:
     "astrbot_plugin_fishworld",
     "Fishworld AstrBot Contributors",
     "鱼铃：鱼世界轮询与自动唤醒",
-    "0.1.0",
+    "0.1.1",
 )
 class FishWorldPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -110,6 +118,7 @@ class FishWorldPlugin(Star):
         self.tool_visibility = None
         self.last_tool_result = ""
         self.idle_status = ""
+        self.alarm_status = ""
         self.diary_busy = False
 
     def _forget_watch(self):
@@ -137,6 +146,7 @@ class FishWorldPlugin(Star):
             self._forget_watch()
             self.tool_visibility = None
             self.last_tool_result = self.idle_status = self.last_error = ""
+            self.alarm_status = ""
             self.next_fetch = self.next_delivery = 0.0
             self.last_check = self.last_response = self.last_skipped = self.failures = 0
 
@@ -209,11 +219,26 @@ class FishWorldPlugin(Star):
             self.store.roll_day(now)
             need_state = (
                 cfg["pause_while_sleeping"]
+                or bool(cfg["wake_time"] and cfg["mode"] == "agent")
                 or (cfg["mode"] == "agent" and cfg["idle_minutes"] > 0)
                 or ("cards" in cfg["event_kinds"] and "cards" in cfg["wake_kinds"])
             )
-            if need_state and self.session is not None and now >= self.next_state:
+            slot = alarm_slot(cfg["wake_time"], now) if cfg["mode"] == "agent" else None
+            needs_alarm_state = bool(
+                slot
+                and state["alarm_day"] < slot[0]
+                and not self.state_error
+                and self.snapshot_at < slot[1]
+                and state["sleeping"]
+            )
+            if (
+                need_state
+                and self.session is not None
+                and (now >= self.next_state or needs_alarm_state)
+            ):
                 await self._read_state(cfg, now)
+            if await self._check_alarm(cfg, time.time()):
+                return
             if cfg["pause_while_sleeping"] and state["sleeping"]:
                 return
             now = time.time()
@@ -226,6 +251,72 @@ class FishWorldPlugin(Star):
                 self._save()
             if time.time() >= self.next_delivery:
                 await self._deliver(cfg, time.time())
+
+    async def _check_alarm(self, cfg, now):
+        state = self.store.data
+        slot = alarm_slot(cfg["wake_time"], now)
+        if not slot or cfg["mode"] != "agent":
+            return False
+        day, due = slot
+        if state["alarm_day"] >= day:
+            return False
+        snapshot = self.snapshot
+        if (
+            self.state_error
+            or snapshot is None
+            or not due <= self.snapshot_at <= now
+            or now - self.snapshot_at > cfg["sleep_check_seconds"] + 10
+        ):
+            self.alarm_status = "等待到点后的有效状态"
+            return False
+        signal = sleep_signal(snapshot)
+        if signal is False:
+            state["alarm_day"] = day
+            self.alarm_status = "确认已醒，今天无需闹钟"
+            self._save()
+            return False
+        fish = fish_number(snapshot)
+        if signal is not True or not fish:
+            self.alarm_status = "无法确认睡眠或鱼的编号"
+            return False
+        if in_quiet_hours(cfg["quiet_start"], cfg["quiet_end"], now):
+            self.alarm_status = "免打扰中"
+        elif state["busy"]:
+            self.alarm_status = "等待已提交的会话结束"
+        elif state["wake_count"] >= cfg["max_wakes_per_day"]:
+            self.alarm_status = "每日唤醒额度不足"
+        elif now < self.next_delivery:
+            self.alarm_status = "等待投递退避结束"
+        elif not self._alarm_tools_ready(cfg):
+            self.alarm_status = "未找到配置的鱼世界 world_now 和 world_do"
+        else:
+            try:
+                self._dispatch(cfg, now, [], alarm=(day, due, fish))
+            except Exception:
+                if self.storage_error:
+                    raise
+                self.next_delivery = now + 60
+                self.alarm_status = (
+                    "提交结果未知，当天不会自动再试"
+                    if state["alarm_day"] == day
+                    else "暂不能提交，请检查绑定的 QQ 会话"
+                )
+            else:
+                self.alarm_status = "已提交起床任务，等待鱼世界状态确认"
+                return True
+        return False
+
+    def _alarm_tools_ready(self, cfg):
+        try:
+            server = cfg["mcp_server_name"]
+            return bool(
+                server
+                and all(
+                    mounted_tool(self.context, name, server) for name in ("world_now", "world_do")
+                )
+            )
+        except (AttributeError, TypeError, RuntimeError):
+            return False
 
     async def _fetch(self, cfg, now):
         self.last_check = now
@@ -284,6 +375,11 @@ class FishWorldPlugin(Star):
             self.next_state = self.snapshot_at + min(cfg["interval_seconds"], 60)
             if not self.failures:
                 self.next_fetch = min(self.next_fetch, self.snapshot_at)
+        if signal is False and self.alarm_status in (
+            "已提交起床任务，等待鱼世界状态确认",
+            "会话已收到起床任务，尚未确认实际起床",
+        ):
+            self.alarm_status = "观看接口已确认鱼醒了"
 
     def _state_failed(self, now, interval, reason, retry=0):
         self.state_failures += 1
@@ -337,11 +433,17 @@ class FishWorldPlugin(Star):
         event.set_extra(MARKER, uuid.uuid4().hex)
         return adapter, event
 
-    def _dispatch(self, cfg, now, rows, *, idle=False, test=False):
+    def _dispatch(self, cfg, now, rows, *, idle=False, test=False, alarm=None):
         snapshot = self._fresh_snapshot(cfg, now)
         prompt_state = state_brief(snapshot) if snapshot and not test else ""
         adapter, event = self._make_event(
-            wake_prompt(rows, idle=idle, test=test, snapshot=prompt_state)
+            wake_prompt(
+                rows,
+                idle=idle,
+                test=test,
+                snapshot=prompt_state,
+                alarm_fish=alarm[2] if alarm else "",
+            )
         )
         if test:
             event.set_extra(IS_TEST, True)
@@ -349,6 +451,9 @@ class FishWorldPlugin(Star):
             event.set_extra(FALLBACK_ROWS, rows)
         previous = copy.deepcopy(self.store.data)
         state = self.store.data
+        if alarm:
+            event.set_extra(IS_ALARM, (alarm[1], cfg["wake_time"], cfg["mcp_server_name"]))
+            state["alarm_day"] = alarm[0]
         self.store.consume(rows)
         state["wake_count"] += 1
         state["idle_count"] += int(idle)
@@ -363,7 +468,11 @@ class FishWorldPlugin(Star):
         try:
             adapter.commit_event(event)
         except Exception:
-            self.store.data = previous
+            if alarm:
+                state["busy"] = None
+                state["last_delivery"] = "闹钟提交结果未知，当天不会自动再试"
+            else:
+                self.store.data = previous
             self._save()
             raise
         if test:
@@ -421,7 +530,14 @@ class FishWorldPlugin(Star):
             if agent:
                 self._dispatch(cfg, now, agent)
             elif not state["pending"] and self._idle_due(effective, now):
-                self.idle_status = idle_blocker(snapshot, now) if snapshot else "没有新鲜状态"
+                self.idle_status = (
+                    "通知查询异常或没有近期有效响应"
+                    if self.failures
+                    or not 0 <= now - self.last_response <= cfg["interval_seconds"] * 2
+                    else idle_blocker(snapshot, now)
+                    if snapshot and not self.state_error
+                    else "没有新鲜状态"
+                )
                 if not self.idle_status:
                     self._dispatch(cfg, now, [], idle=True)
             self.delivery_failures = 0
@@ -461,7 +577,32 @@ class FishWorldPlugin(Star):
                         "当前会话可见 world_now" if tool is not None else "当前会话未挂载 world_now"
                     )
                     if request is not None and hasattr(request, "func_tool"):
-                        if event.get_extra(IS_TEST):
+                        alarm = event.get_extra(IS_ALARM)
+                        if alarm:
+                            due, saved_time, server = alarm
+                            cfg = settings(self.config)
+                            now = time.time()
+                            action = request_tool(request, "world_do")
+                            allowed = (
+                                cfg["enabled"]
+                                and not self.store.data["paused"]
+                                and cfg["mode"] == "agent"
+                                and cfg["wake_time"] == saved_time
+                                and cfg["mcp_server_name"] == server
+                                and due <= now < due + ALARM_WINDOW_SECONDS
+                                and not in_quiet_hours(cfg["quiet_start"], cfg["quiet_end"], now)
+                                and is_mcp_tool(tool, "world_now", server)
+                                and is_mcp_tool(action, "world_do", server)
+                            )
+                            request.func_tool = (
+                                type(request.func_tool)([tool, action]) if allowed else None
+                            )
+                            self.alarm_status = (
+                                "会话已收到起床任务，尚未确认实际起床"
+                                if allowed
+                                else "起床任务已失效或目标会话缺少鱼世界工具"
+                            )
+                        elif event.get_extra(IS_TEST):
                             # Limit only this synthetic diagnostic request. Don't alter registered tools.
                             request.func_tool = type(request.func_tool)([tool]) if tool else None
                         elif tool is None:
@@ -544,6 +685,14 @@ class FishWorldPlugin(Star):
             f"间隔：{cfg['interval_seconds']} 秒；基准已建立：{bool(state['cursor'])}\n"
             f"最近请求：{stamp(self.last_check)}；最近有效响应：{stamp(self.last_response)}\n"
             f"睡眠：{sleep_status}；最近状态：{stamp(self.snapshot_at)}\n"
+            f"定时起床：{cfg['wake_time'] or '关闭'}"
+            + (
+                f"；上次处理日期：{state['alarm_day']}"
+                if cfg["wake_time"] and state["alarm_day"]
+                else ""
+            )
+            + (f"；{self.alarm_status}" if cfg["wake_time"] and self.alarm_status else "")
+            + "\n"
             f"状态接口：{self.state_error or ('正常' if self.snapshot_at else '尚未检查')}\n"
             f"待处理：{len(state['pending'])}；服务端 skipped：{self.last_skipped}\n"
             f"今日唤醒：{state['wake_count']}/{cfg['max_wakes_per_day']}；其中闲时：{state['idle_count']}/{cfg['max_idle_wakes_per_day']}\n"
@@ -641,6 +790,8 @@ class FishWorldPlugin(Star):
                     "binding",
                     "paused",
                     "sleeping",
+                    "alarm_day",
+                    "busy",
                     "day",
                     "wake_count",
                     "idle_count",

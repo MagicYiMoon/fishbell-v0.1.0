@@ -8,6 +8,12 @@ from email.utils import parsedate_to_datetime
 
 WATCH_BASE = "https://api.yuyuworld.app/v1"
 PRIVATE_TOKEN = re.compile(r"\b(?:fwr?_[A-Za-z0-9_./+=-]+)\b")
+FISH_NUMBER = re.compile(r"#[0-9]{1,16}$")
+AWAKE_POSES = frozenset(
+    "stand front sit-front sit bike squat drink eat eat-stand read-sit read gaze knit write "
+    "mask footbath jog stretch kite sweep wipe toss aim water brush stroll wade talk eat-hand "
+    "fish fish-sit fish-lamp fish-sit-lamp walk".split()
+)
 
 
 class WatchError(ValueError):
@@ -65,8 +71,8 @@ def sleep_signal(state: dict) -> bool | None:
     pose = figure.get("pose")
     if pose == "sleep":
         return True
-    # doze may mean an offline passenger; without asleep it isn't a reliable signal.
-    if isinstance(pose, str) and pose and pose != "doze":
+    # doze and unknown poses don't override an earlier confirmed sleep.
+    if isinstance(pose, str) and pose in AWAKE_POSES:
         return False
     return None
 
@@ -75,6 +81,11 @@ def validated_state(value) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get("fish"), str) or not value["fish"]:
         raise ValueError("鱼世界状态格式无效")
     return value
+
+
+def fish_number(state: dict) -> str:
+    match = FISH_NUMBER.search(state["fish"].strip())
+    return match.group() if match else ""
 
 
 def idle_blocker(state: dict, now: float) -> str:
@@ -96,6 +107,8 @@ def idle_blocker(state: dict, now: float) -> str:
     elif isinstance(until, (int, float)) and not isinstance(until, bool):
         if (until / 1000 if until > 10**12 else until) > now:
             return "活动尚未结束"
+    if doing.get("name") and until is None:
+        return "正在进行不限时活动"
     return ""
 
 

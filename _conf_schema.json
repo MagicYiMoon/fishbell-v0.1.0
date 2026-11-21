@@ -5,6 +5,7 @@
   "interval_seconds": {"description": "轮询间隔（秒）", "type": "int", "default": 30, "hint": "最小 15 秒；空轮询不调用模型。"},
   "pause_while_sleeping": {"description": "鱼睡着时暂停通知轮询", "type": "bool", "default": true, "hint": "睡眠期间只低频查是否醒来；停止自动 QQ 提醒和 MCP 唤醒，醒来从旧游标继续。"},
   "sleep_check_seconds": {"description": "睡眠时检查是否醒来的间隔（秒）", "type": "int", "default": 120, "hint": "范围 30–1800。仅检查观看状态，不取通知、不消耗模型额度；接口失败时会退避。"},
+  "wake_time": {"description": "定时起床（北京时间，留空关闭）", "type": "string", "default": "", "hint": "例如 08:00。仅 agent 模式，需本人确认并配置同一条鱼的 MCP。到点后两小时内确认仍睡着才提交一次起床任务，遵守免打扰与每日额度。"},
   "mcp_server_name": {"description": "今日日记使用的 AstrBot MCP 连接名称", "type": "string", "default": "fish-world", "hint": "填写管理面板中这条鱼已接好的 MCP 连接名称，不是地址或密钥。留空关闭私聊日记查询。"},
   "event_kinds": {"description": "接收的事件类型", "type": "list", "default": ["talk", "message", "note", "friend_request", "doorbell", "work", "like", "feed"], "hint": "可用 talk、message、note、friend_request、doorbell、work、arrive、done、cards、like、feed。自定义列表升级后保持原样。"},
   "wake_kinds": {"description": "需要唤醒模型的事件类型", "type": "list", "default": ["talk", "message", "friend_request", "doorbell", "work"], "hint": "须同时在接收类型中。like、feed 只提醒；cards 可选，当前不在牌馆或提醒过旧时只发普通提醒。"},

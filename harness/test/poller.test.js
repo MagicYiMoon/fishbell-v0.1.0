@@ -13,12 +13,12 @@ function fixture(overrides = {}, disk, initial) {
     save: (next) => { saved = structuredClone(next) } }
   const config = { key: 'fwr_unit_test', sessionId: 'fish', ...overrides }
   const f = { calls, deliveries, store, state: { fish: '鱼#1', figure: { asleep: false }, where: { kind: 'place' } },
-    notify: { cursor: 'base', items: [] }, ready: true, step(n) { at += n * 1000 }, time: () => at }
+    notify: { cursor: 'base', items: [] }, ready: true, alarmReady: true, step(n) { at += n * 1000 }, time: () => at }
   f.target = { id: 'fish', status: 'idle', followup: (p) => deliveries.push(['wake', p]),
     inject: (p) => deliveries.push(['notice', p]) }
   f.roots = [f.target, { id: 'another', followup() { assert.fail('delivered to another conversation') } }]
   f.open = () => new Poller(config, {
-    store, roots: () => f.roots, now: f.time, mcpReady: () => f.ready,
+    store, roots: () => f.roots, now: f.time, mcpReady: () => f.ready, alarmReady: () => f.alarmReady,
     request(path, key, { cursor }) {
       calls.push([path, cursor]); assert.equal(key, config.key)
       const result = f[path]
@@ -88,6 +88,76 @@ test('durable queue survives delivery failure, retries once and deduplicates a r
   assert.equal(state.poller.status().pending, 0)
 })
 
+test('scheduled alarm rechecks sleep on time, survives restart, then restores the original notification cursor', async () => {
+  const f = fixture({ wakeTime: '12:01' })
+  await f.poller.tick()
+  f.step(30)
+  f.state.figure.asleep = true
+  await f.poller.tick()
+  f.step(30)
+  await f.poller.tick()
+  assert.deepEqual(f.calls, [['state', ''], ['notify', ''], ['state', ''], ['state', '']])
+  assert.equal(f.poller.status().alarmDay, '2026-11-20')
+  assert.equal(f.poller.status().wakes, 1)
+  assert.match(f.deliveries[0][1].content[0].text, /定时起床.*鱼 #1.*world_do/)
+  f.poller.stop()
+  f.poller = f.open()
+  await f.poller.tick()
+  assert.equal(f.deliveries.length, 1)
+  f.step(120)
+  f.state.figure.asleep = false
+  f.notify = { cursor: 'after', items: [] }
+  await f.poller.tick()
+  assert.deepEqual(f.calls.at(-1), ['notify', 'base'])
+  assert.equal(f.poller.state.cursor, 'after')
+})
+
+test('alarm waits for quiet hours, healthy state, mounted tools and idle session; failure is not replayed', async () => {
+  const f = fixture({ wakeTime: '12:00', quietStart: '23:00', quietEnd: '12:01' })
+  f.state.figure.asleep = true
+  await f.poller.tick()
+  assert.match(f.poller.status().alarmStatus, /免打扰/)
+  f.step(60)
+  f.alarmReady = false
+  await f.poller.tick()
+  assert.match(f.poller.status().alarmStatus, /未挂载/)
+  f.alarmReady = true
+  f.target.status = 'running'
+  await f.poller.tick()
+  assert.match(f.poller.status().alarmStatus, /等待会话/)
+  f.target.status = 'idle'
+  f.step(60)
+  f.state = new Error('network')
+  await f.poller.tick()
+  assert.match(f.poller.status().alarmStatus, /有效状态/)
+  assert.equal(f.deliveries.length, 0)
+  f.state = { fish: '鱼#1', figure: { asleep: true } }
+  f.target.followup = () => { throw Error('uncertain') }
+  f.step(240)
+  await f.poller.tick()
+  assert.match(f.poller.status().alarmStatus, /结果未知/)
+  f.poller = f.open()
+  await f.poller.tick()
+  assert.equal(f.poller.status().wakes, 1)
+  assert.equal(f.poller.status().alarmDay, '2026-11-20')
+})
+
+test('already-awake fish does not get woken during a later nap; expired or disabled alarm does nothing', async () => {
+  const f = fixture({ wakeTime: '12:00', maxWakesPerDay: 1 })
+  await f.poller.tick()
+  assert.equal(f.poller.status().alarmDay, '2026-11-20')
+  f.state.figure.asleep = true
+  f.step(30)
+  await f.poller.tick()
+  assert.equal(f.deliveries.length, 0)
+  for (const config of [{ wakeTime: '09:59' }, { wakeTime: '' }, { wakeTime: '12:00', maxWakesPerDay: 0 }]) {
+    const other = fixture(config)
+    other.state.figure.asleep = true
+    await other.poller.tick()
+    assert.equal(other.deliveries.length, 0)
+  }
+})
+
 test('quiet hours, missing MCP, stale doorbells and likes inject without waking', async () => {
   const f = fixture({ quietStart: '23:00', quietEnd: '13:00' })
   await f.poller.tick()
@@ -149,7 +219,11 @@ test('unselected sessions do not poll; invalid response never advances cursor; t
   assert.match(f.poller.status().notifyError, /保留原游标/)
   assert.equal((await f.poller.test()).ok, true)
   assert.match(f.deliveries[0][1].content[0].text, /只调用.*world_now/)
-  assert.equal(f.poller.status().wakes, 0)
+  assert.equal(f.poller.status().wakes, 1)
+  f.poller.update(normalize({ sessionId: 'fish', maxWakesPerDay: 1 }))
+  assert.equal((await f.poller.test()).ok, false)
   assert.equal(sleepSignal({ figure: { asleep: false, pose: 'sleep' } }), false)
   assert.throws(() => normalize({ eventModes: { like: 'wake' } }))
+  assert.throws(() => normalize({ wakeTime: '12:70' }))
+  assert.equal(sleepSignal({ figure: { pose: 'unknown-new-pose' } }), null)
 })

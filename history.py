@@ -38,9 +38,7 @@ def request_tool(request, name: str):
     return tool if tool and getattr(tool, "active", True) else None
 
 
-def mounted_tool(context, name: str, server: str):
-    manager = context.get_llm_tool_manager()
-    tool = manager.get_full_tool_set().get_tool(name)
+def is_mcp_tool(tool, name: str, server: str) -> bool:
     raw = getattr(tool, "_wrapped", tool)  # Keep the permission-guarded tool for calls.
     if (
         tool is None
@@ -48,8 +46,14 @@ def mounted_tool(context, name: str, server: str):
         or getattr(raw, "mcp_server_name", None) != server
         or _read(getattr(raw, "mcp_tool", None), "name") != name
     ):
-        return None
-    return tool
+        return False
+    return True
+
+
+def mounted_tool(context, name: str, server: str):
+    manager = context.get_llm_tool_manager()
+    tool = manager.get_full_tool_set().get_tool(name)
+    return tool if is_mcp_tool(tool, name, server) else None
 
 
 async def read_diary(context, event, server: str, date: str) -> str:

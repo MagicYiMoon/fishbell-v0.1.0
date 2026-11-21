@@ -1,6 +1,6 @@
 {
   "name": "@local/fishworld-harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "鱼铃：鱼世界的 DeepSeek Harness 提醒插件，支持会话唤醒、睡眠暂停和闲时自主",
   "license": "MIT",

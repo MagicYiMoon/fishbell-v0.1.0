@@ -437,16 +437,22 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.cfg["idle_minutes"] = 20
         self.assertFalse(self.plugin._idle_due(self.cfg, NOW + 1199))
         self.assertTrue(self.plugin._idle_due(self.cfg, NOW + 1200))
+        self.plugin.last_response = NOW + 1200
         for recent in (
             None,
             snapshot(True),
             snapshot(where={"kind": "trip"}),
             snapshot(doing={"until": NOW + 1500}),
+            snapshot(doing={"name": "不限时钓鱼", "until": None}),
         ):
             self.plugin.snapshot, self.plugin.snapshot_at = recent, NOW + 1200
             await self.plugin._deliver(self.cfg, NOW + 1200)
             self.assertFalse(self.adapter.events)
         self.plugin.snapshot = snapshot()
+        self.plugin.failures = 1
+        await self.plugin._deliver(self.cfg, NOW + 1200)
+        self.assertFalse(self.adapter.events)
+        self.plugin.failures = 0
         await self.plugin._deliver(self.cfg, NOW + 1200)
         self.assertEqual(self.plugin.store.data["idle_count"], 1)
         self.assertIn("闲时", self.adapter.events[0].message_str)
@@ -556,6 +562,90 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.plugin.store.data["sleeping"])
                 self.assertIn("[like]", self.sent[0][1])
                 self.assertFalse(self.adapter.events)
+
+    async def test_alarm_executes_one_dedicated_wake_then_resumes_from_sleep_cursor(self):
+        previous = core.datetime.fromtimestamp(NOW, core.BEIJING).replace(second=0)
+        at = previous.timestamp()
+        self.plugin.config["wake_time"] = previous.strftime("%H:%M")
+        tools = [
+            types.SimpleNamespace(name=name, mcp_server_name=server, mcp_tool={"name": name})
+            for name, server in (
+                ("world_now", "fish-world"),
+                ("world_do", "fish-world"),
+                ("world_say", "fish-world"),
+            )
+        ]
+        self.plugin.context.get_llm_tool_manager = lambda: types.SimpleNamespace(
+            get_full_tool_set=lambda: Tools(tools)
+        )
+        clock = [at - 10]
+        status = [snapshot(True)]
+        calls = []
+
+        async def read(_session, url, _key, _now, params=None):
+            calls.append((url, params))
+            return (
+                status[0] if url == main.STATE_API else {"cursor": "next", "items": [item("like")]}
+            )
+
+        def committed(event):
+            state = core.StateStore(self.path, at).data
+            self.assertEqual(state["alarm_day"], previous.date().isoformat())
+            self.assertEqual(state["wake_count"], 1)
+            self.assertEqual(state["cursor"], "1")
+            self.assertIn("鱼 #1", event.message_str)
+
+        self.plugin.session = object()
+        self.adapter.on_commit = committed
+        with (
+            patch.object(main, "watch_json", read),
+            patch.object(main.time, "time", side_effect=lambda: clock[0]),
+        ):
+            await self.plugin.check()
+            self.assertFalse(self.adapter.events)
+            clock[0] = at
+            await self.plugin.check()
+            self.assertEqual(len(self.adapter.events), 1)
+            event = self.adapter.events[0]
+            request = types.SimpleNamespace(func_tool=Tools(tools))
+            await self.plugin.on_request(event, request)
+            self.assertEqual([t.name for t in request.func_tool.tools], ["world_now", "world_do"])
+            request.func_tool = Tools([tools[0], types.SimpleNamespace(name="world_do")])
+            await self.plugin.on_request(event, request)
+            self.assertIsNone(request.func_tool)
+            await self.plugin.on_response(event, types.SimpleNamespace(tools_call_name=[]))
+            self.plugin.store = core.StateStore(self.path, at)
+            self.plugin._forget_watch()
+            await self.plugin.check()
+            self.assertEqual(len(self.adapter.events), 1)
+            self.assertTrue(all(url == main.STATE_API for url, _ in calls))
+            clock[0] += 120
+            status[0] = snapshot(False)
+            await self.plugin.check()
+            self.assertEqual(calls[-1], (main.API, {"cursor": "1"}))
+            self.assertEqual(self.plugin.store.data["cursor"], "next")
+
+    async def test_alarm_checks_bounds_quiet_budget_and_freshness(self):
+        scheduled = core.datetime.fromisoformat("2026-11-17T23:30:00+08:00").timestamp()
+        cfg = main.settings({"wake_time": "23:30", "quiet_start": "23:00", "quiet_end": "00:00"})
+        self.plugin.snapshot = snapshot(True)
+        self.plugin.snapshot_at = scheduled - 1
+        self.assertFalse(await self.plugin._check_alarm(cfg, scheduled))
+        self.assertIn("有效状态", self.plugin.alarm_status)
+        self.plugin.snapshot_at = scheduled
+        self.assertFalse(await self.plugin._check_alarm(cfg, scheduled))
+        self.assertIn("免打扰", self.plugin.alarm_status)
+        self.plugin.snapshot_at = scheduled + 1800
+        self.plugin.store.data["wake_count"] = 48
+        self.assertFalse(await self.plugin._check_alarm(cfg, scheduled + 1800))
+        self.assertIn("额度", self.plugin.alarm_status)
+        self.assertEqual(core.alarm_slot("23:30", scheduled + 1800)[0], "2026-11-17")
+        self.assertIsNone(core.alarm_slot("23:30", scheduled + 7200))
+        self.assertFalse(self.adapter.events)
+        self.assertEqual(self.plugin.store.data["alarm_day"], "")
+        self.assertIsNone(main.sleep_signal({"figure": {"pose": "new-unknown"}}))
+        with self.assertRaises(ValueError):
+            main.settings({"wake_time": "24:00"})
 
     async def test_probe_allowlist_and_success_require_real_tool_result(self):
         now_tool = types.SimpleNamespace(name="world_now")

@@ -6,4 +6,5 @@
         sessionId: ''
         enabled: true
         pauseWhileSleeping: true
+        wakeTime: ''
         idleEnabled: false

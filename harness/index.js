@@ -15,6 +15,7 @@ export const Config = Schema.object({
   pauseWhileSleeping: Schema.boolean().default(true),
   intervalSeconds: number('intervalSeconds', 15, 900),
   sleepCheckSeconds: number('sleepCheckSeconds', 60, 3600),
+  wakeTime: Schema.string().default('').description('定时起床，北京时间 HH:MM；留空关闭。'),
   maxWakesPerDay: number('maxWakesPerDay', 0, 100),
   talkCooldownSeconds: number('talkCooldownSeconds', 0, 3600),
   quietStart: Schema.string().default(''),
@@ -40,6 +41,15 @@ export function mcpDiagnostic(tools, agent) {
   } catch { return { state: 'unknown', message: '读取目标会话的可见工具失败' } }
 }
 
+function alarmToolsReady(tools, agent) {
+  try {
+    const names = tools.schemas(agent).map(({ name }) => name).filter((name) => typeof name === 'string')
+    const now = names.filter((name) => name === 'world_now' || /^mcp__[^\s]+__world_now$/.test(name))
+    const act = names.filter((name) => name === 'world_do' || /^mcp__[^\s]+__world_do$/.test(name))
+    return now.length === 1 && act.length === 1 && act[0] === now[0].replace(/world_now$/, 'world_do')
+  } catch { return false }
+}
+
 export function apply(ctx, config) {
   const roots = () => {
     try { return ctx.agents.roots().filter((a) => typeof a?.id === 'string' && a.id) }
@@ -48,6 +58,7 @@ export function apply(ctx, config) {
   const fallback = join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'fishworld-harness')
   const poller = new Poller({ ...config, stateDirectory: config.stateDirectory || fallback }, {
     roots, mcpReady: (agent) => mcpDiagnostic(ctx.tools, agent).state === 'visible',
+    alarmReady: (agent) => alarmToolsReady(ctx.tools, agent),
   })
   const diagnostic = () => mcpDiagnostic(ctx.tools, poller.target())
   function tool(key, description, execute) {

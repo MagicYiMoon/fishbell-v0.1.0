@@ -73,6 +73,7 @@ window.__ModuleLoader__.load({
           h('p', null, `轮询：${!status.enabled || !status.keyConfigured || !status.sessionReady ? '未开始' :
             status.sleeping ? '睡眠暂停' : status.quiet ? '免打扰（只注入）' : '运行中'} · 待投递 ${status.pending} · 今日唤醒 ${status.wakes} 次（闲时 ${status.idle} 次）`),
           h('p', null, `状态：${readAt(status.lastStateAt)} · 通知：${readAt(status.lastNotifyAt)}`),
+          ...(saved.config.wakeTime ? [h('p', { key: 'alarm' }, `定时起床：${saved.config.wakeTime}（北京时间）${status.alarmStatus ? ' · ' + status.alarmStatus : ''}${status.alarmDay ? ' · 上次处理 ' + status.alarmDay : ''}`)] : []),
           h('p', null, mcp.message),
           ...(status.lastSkipped ? [h('p', { key: 'skipped' }, `通知接口本次跳过 ${status.lastSkipped} 条旧记录。可以去官网补看。`)] : []),
           ...[status.storageError, status.stateError, status.notifyError, status.lastDelivery].filter(Boolean).map((s, i) =>
@@ -84,6 +85,8 @@ window.__ModuleLoader__.load({
           flag('pauseWhileSleeping', '睡眠期间暂停查通知'),
           number('intervalSeconds', '清醒时轮询间隔（秒）', 15, 900),
           number('sleepCheckSeconds', '睡着时检查醒没醒的间隔（秒）', 60, 3600),
+          time('wakeTime', '定时起床（北京时间，留空关闭）'),
+          h('small', null, '请由主人设置。到点后两小时内，仍睡着且会话空闲时才会提交一次起床任务。占用每日额度，遵守免打扰。'),
           number('maxWakesPerDay', '每天最多唤醒（含闲时）', 0, 100),
           number('talkCooldownSeconds', '同一条鱼当面对话唤醒冷却（秒）', 0, 3600),
           time('quietStart', '免打扰开始（北京时间）'), time('quietEnd', '免打扰结束（北京时间）'),
